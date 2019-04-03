@@ -1,6 +1,8 @@
 import json
 import requests
 import traceback
+
+import urllib3
 from tqdm import tqdm
 import vscoscrape.constants as constants
 import asyncio
@@ -19,6 +21,7 @@ import sys
 import geocoder
 import gmplot
 from pytz import timezone
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 htmlcode = """
 <!DOCTYPE>
@@ -149,6 +152,7 @@ htmlcode = """
 """
 
 
+
 def buildPath(x=""):
     path = "%s%s%s" % (os.getcwd(), os.sep, x)
     return path
@@ -210,16 +214,18 @@ class Scraper(object):
                 # os.makedirs(path)
             # os.chdir(path)
             x.pop(0)
-            with ThreadPoolExecutor(max_workers=self.workers) as executor:
-                future_to_url = {executor.submit(
-                    self.download_img_normal, part, journal=True): part for part in x}
-                for future in concurrent.futures.as_completed(future_to_url):
-                    part = future_to_url[future]
-                    try:
-                        data = future.result()
-                    except:
-                        traceback.print_exc()
-                        sys.exit()
+            for part in x:
+                self.download_img_normal(part, journal = True)
+            # with ThreadPoolExecutor(max_workers=5) as executor:
+            #     future_to_url = {executor.submit(
+            #         self.download_img_normal, part, journal=True): part for part in x}
+            #     for future in concurrent.futures.as_completed(future_to_url):
+            #         part = future_to_url[future]
+            #         try:
+            #             data = future.result()
+            #         except:
+            #             traceback.print_exc()
+            #             sys.exit()
             # os.chdir(os.path.normpath(os.getcwd() + os.sep + os.pardir))
         self.pbarj.close()
 
@@ -305,17 +311,18 @@ class Scraper(object):
         self.api_data = []
         self.getImageList(targeturl, key)
         self.pbarj = tqdm(total = len(self.imagelist), desc = 'Downloading posts of %s' % self.username, unit = ' posts')
-
-        with ThreadPoolExecutor(max_workers=self.workers) as executor:
-            future_to_url = {executor.submit(
-                self.download_img_normal, lists): lists for lists in self.imagelist}
-            for future in concurrent.futures.as_completed(future_to_url):
-                liste = future_to_url[future]
-                try:
-                    data = future.result()
-                except:
-                    traceback.print_exc()
-                    sys.exit()
+        for lists in self.imagelist:
+            self.download_img_normal(lists)
+        # with ThreadPoolExecutor(max_workers=self.workers) as executor:
+        #     future_to_url = {executor.submit(
+        #         self.download_img_normal, lists): lists for lists in self.imagelist}
+        #     for future in concurrent.futures.as_completed(future_to_url):
+        #         liste = future_to_url[future]
+        #         try:
+        #             data = future.result()
+        #         except:
+        #             traceback.print_exc()
+        #             sys.exit()
         if write_json:
             with open(self.path.joinpath('api_data.json'), 'w') as f:
                 json.dump(self.api_data, f, sort_keys=False, indent=2)
@@ -345,7 +352,7 @@ class Scraper(object):
         #     pprint.pprint(self.session.get(targeturl, params={
         #         "size": 60, "page": num}, headers=constants.media).json()[key])
         #     exit()
-        z = self.session.get(targeturl, params={"page": num}, headers=constants.media, timeout=(999, 999), verify=False).json()[key]
+        z = self.session.get(targeturl, params={"size": 10000,"page": num}, headers=constants.media, timeout=(120, 120), verify=False).json()[key]
         count = len(z)
         self.api_data.extend(z)
         while count > 0:
@@ -365,7 +372,7 @@ class Scraper(object):
                     self.pbar.update()
             num += 1
             # try:
-            z = self.session.get(targeturl, params={"page": num}, headers=constants.media, timeout=(999, 999), verify=False).json()[key]
+            z = self.session.get(targeturl, params={"size": 10000, "page": num}, headers=constants.media, timeout=(999, 999),verify=False).json()[key]
             # except:
             # print("count=", count, "pagenum=", num)
 
@@ -406,30 +413,35 @@ class Scraper(object):
             # else:
             fpath = self.path.joinpath(fname)
         if fpath.exists():
-            return "done"
-        setctime = ["touch", "--date={}".format(
+            return
+        setctime = ["touch", "-c","--date={}".format(
             upload_date), fpath]
         # print(fpath)
         # print(setctime)
-        subprocess.run(setctime)
         # print(setctime)
         try:
-            with requests.get(lists[0], stream=True, timeout=(999, 999), verify=True) as r:
+            with requests.get(lists[0], stream=True, timeout=(60, 60), verify=False) as r:
                 r.raise_for_status()
                 with open(fpath, 'wb') as f:
                     r.raw.decode_content = True
                     shutil.copyfileobj(r.raw, f)
         except:
-            with open(fpath, 'wb') as f:
-                for chunk in requests.get(lists[0], stream=True, timeout=(999, 999), verify=True).iter_content():
-                    if chunk:
-                        f.write(chunk)
+            traceback.print_exc()
+            try:
+                with requests.get(lists[0], stream=True, timeout=(60, 60), verify=False) as r:
+                    with open(fpath, 'wb') as f:
+                        f.write(r.content)
+            except:
+                traceback.print_exc()
+                return
+                        #requests.get(lists[0], stream=True, timeout=(999, 999)).content())
                 # f.write(r.content)
                 # r.
                 # for chunk in r.iter_content(chunk_size=5*1024*1024*1024):
                 #     if chunk:
                 #         f.write(chunk)
             # f.write(.)
+        subprocess.run(setctime)
         if 'collected_date' in listdict:
             # subpath = buildPath(subname)
             # if not os.path.exists(subpath):
@@ -441,7 +453,7 @@ class Scraper(object):
             # print(destpath)
             if not destpath.exists():
                 shutil.copy2(fpath,destpath)
-                setctime = ["touch", "--date={}".format(
+                setctime = ["touch","-c", "--date={}".format(
                     upload_date), destpath]
                 # print(setctime)
                 subprocess.run(setctime)
@@ -455,7 +467,7 @@ class Scraper(object):
         #         for chunk in r.iter_content(chunk_size=5*1024*1024*1024):
         #             if chunk:
         #                 f.write(chunk)
-        return "done"
+        return
 
     def getCollection(self):
         # %s/journal" % (os.getcwd())
@@ -637,12 +649,13 @@ def main():
         y.sort()
         print(y, "set len=",len(y))
         aws = []
-        executor = ProcessPoolExecutor(max_workers=args.workers)
+        # executor = ProcessPoolExecutor(max_workers=args.workers)
         for z in y:
             try:
+                scraper = Scraper(z, args.workers)
                 # os.chdir(vsco)
                 # try:
-                executor.submit(Scraper(z, args.workers).doit)
+                # executor.submit(Scraper(z, args.workers).doit)
                 # aws.append(asyncio.create_task(Scraper(z, args.workers).doit()))
                 print('Queued {}!'.format(z))
                 # except:
